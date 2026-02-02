@@ -3,97 +3,114 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Spotlight Reel UGC Test</title>
+  <title>Spotlight Reel Creator</title>
   <style>
-    body { font-family: system-ui, Arial; max-width: 900px; margin: 24px auto; padding: 0 12px; }
-    fieldset { margin: 16px 0; padding: 12px; }
-    label { display:block; margin-top: 8px; }
-    input, button, select { padding: 8px; margin-top: 6px; }
+    body { font-family: system-ui, Arial; max-width: 1100px; margin: 24px auto; padding: 0 12px; }
+    fieldset { margin: 16px 0; padding: 12px; border: 1px solid #ddd; border-radius: 10px; }
+    legend { padding: 0 8px; }
+    label { display:block; margin-top: 10px; font-weight: 600; }
+    input, button, select { padding: 10px; margin-top: 6px; border-radius: 10px; border: 1px solid #ccc; }
     button { cursor: pointer; }
-    .row { display:flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .row { display:flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
     .muted { color:#666; font-size: 13px; }
-    #log { white-space: pre-wrap; background:#0b1020; color:#e8ecff; padding: 12px; border-radius: 8px; min-height: 120px; }
-    .ok { color: #1b8a3a; }
-    .bad { color: #b42318; }
+    .ok { color: #1b8a3a; font-weight: 700; }
+    .bad { color: #b42318; font-weight: 700; }
     .hidden { display:none; }
+    #log { white-space: pre-wrap; background:#0b1020; color:#e8ecff; padding: 12px; border-radius: 10px; min-height: 150px; }
+    #avaturn-sdk-container { width: 100%; height: 650px; border-radius: 12px; overflow: hidden; border: 1px solid #ddd; }
+    .pill { display:inline-block; padding: 4px 10px; border-radius: 999px; background:#f2f4f7; font-size: 12px; margin-left: 6px; }
+    audio { width: 100%; margin-top: 10px; }
   </style>
 </head>
 <body>
-  <h1>Spotlight Reel UGC Test</h1>
-  <p class="muted">Minimal end-to-end: login → upload model + 5s audio → create/publish UGC item.</p>
+  <h1>Spotlight Reel Creator</h1>
+  <p class="muted">
+    Flow: Login → Create avatar (Avaturn) → Record 5s voice → Create/Update single UGC reel.
+  </p>
 
   <fieldset>
-    <legend>0) Configure</legend>
+    <legend>0) Config</legend>
+    <div class="muted">These are public identifiers. Don’t put PlayFab Secret Key on this page.</div>
     <label>PlayFab TitleId</label>
-    <input id="titleId" placeholder="YOUR_TITLE_ID" />
+    <input id="titleId" />
 
-    <label>UGC ContentType (must exist in your title config)</label>
-    <input id="contentType" value="Reel" />
+    <label>Avaturn subdomain</label>
+    <input id="avaturnSubdomain" />
 
-    <p class="muted">
-      If you get “content type isn’t supported”, add this ContentType in Game Manager:
-      Economy → Settings (Catalog v2 config). :contentReference[oaicite:6]{index=6}
-    </p>
+    <label>Animation Index</label>
+    <select id="animIndex">
+      <option value="0">0</option>
+      <option value="1">1</option>
+      <option value="2">2</option>
+      <option value="3">3</option>
+    </select>
+
+    <div class="row" style="margin-top: 12px;">
+      <button id="btnUseDefaults" type="button">Use Defaults</button>
+      <button id="btnClearSession" type="button">Clear Session</button>
+      <span id="cfgStatus" class="muted"></span>
+    </div>
   </fieldset>
 
-  <fieldset>
-    <legend>1) Login (no register)</legend>
+  <fieldset id="loginBox">
+    <legend>1) Login</legend>
     <div class="row">
       <div style="flex:1; min-width: 240px;">
-        <label>Email</label>
-        <input id="email" type="email" placeholder="email@example.com" />
+        <label>Username</label>
+        <input id="username" placeholder="Your PlayFab username" />
       </div>
       <div style="flex:1; min-width: 240px;">
         <label>Password</label>
-        <input id="password" type="password" placeholder="password" />
+        <input id="password" type="password" placeholder="Password" />
       </div>
       <div>
         <label>&nbsp;</label>
-        <button id="btnLogin">Login</button>
+        <button id="btnLogin" type="button">Login</button>
       </div>
     </div>
-
     <div id="loginStatus" class="muted"></div>
   </fieldset>
 
-  <fieldset id="uploadBox" class="hidden">
-    <legend>2) Pick model + audio</legend>
+  <fieldset id="avaturnBox" class="hidden">
+    <legend>2) Create Avatar (Avaturn)</legend>
+    <div class="muted">
+      Click Next/Export in Avaturn when done. We’ll capture the model URL.
+      <span id="avaturnPill" class="pill">Waiting for export…</span>
+    </div>
+    <div id="avaturn-sdk-container"></div>
+    <div class="muted" id="avaturnStatus"></div>
+  </fieldset>
 
-    <label>Model file (.glb)</label>
-    <input id="modelFile" type="file" accept=".glb,model/gltf-binary" />
+  <fieldset id="audioBox" class="hidden">
+    <legend>3) Voice Note (Record exactly 5s)</legend>
+    <div class="row">
+      <button id="btnRec" type="button">Record 5s</button>
+      <button id="btnStop" type="button" disabled>Stop</button>
+      <span id="recStatus" class="muted"></span>
+    </div>
+    <audio id="audioPreview" controls class="hidden"></audio>
+    <div class="muted">Tip: recording works only on https or localhost.</div>
+  </fieldset>
 
-    <fieldset>
-      <legend>Audio (choose one)</legend>
+  <fieldset id="submitBox" class="hidden">
+    <legend>4) Create/Update Reel (1 per user)</legend>
 
-      <div class="row">
-        <button id="btnRec" type="button">Record 5s</button>
-        <button id="btnStop" type="button" disabled>Stop</button>
-        <span id="recStatus" class="muted"></span>
-      </div>
-
-      <div style="margin-top: 10px;">
-        <audio id="audioPreview" controls class="hidden"></audio>
-      </div>
-
-      <label>OR upload audio file (mp3/webm/wav/m4a)</label>
-      <input id="audioFile" type="file" accept="audio/*" />
-
-      <p class="muted">
-        Recording path auto-stops at 5 seconds. Upload path does not trim; it only uploads what you pick.
-      </p>
-    </fieldset>
-
-    <label>Item Title (stored in UGC metadata)</label>
+    <label>Item Title</label>
     <input id="itemTitle" value="Spotlight Reel" />
 
     <div class="row" style="margin-top: 12px;">
-      <button id="btnUpload" type="button">Upload & Publish UGC</button>
-      <span id="uploadStatus" class="muted"></span>
+      <button id="btnSubmit" type="button">Create / Update Reel</button>
+      <span id="submitStatus" class="muted"></span>
     </div>
 
-    <p class="muted">
-      Upload uses CreateUploadUrls → PUT to Azure Blob (x-ms-blob-type: blockblob) → CreateDraftItem(Publish=true). :contentReference[oaicite:7]{index=7}
-    </p>
+    <div class="muted" style="margin-top: 10px;">
+      We store:
+      <ul>
+        <li>Voice file in UGC contents</li>
+        <li>Avaturn URL + animationIndex in item metadata</li>
+        <li>PrimaryReelItemId in Player ReadOnly Data</li>
+      </ul>
+    </div>
   </fieldset>
 
   <fieldset>
@@ -101,72 +118,156 @@
     <div id="log"></div>
   </fieldset>
 
-<script>
-(() => {
-  // ------------------------------
-  // Helpers
-  // ------------------------------
-  const $ = (id) => document.getElementById(id);
-  const logEl = $("log");
+  <script type="module">
+    import { AvaturnSDK } from "https://cdn.jsdelivr.net/npm/@avaturn/sdk/dist/index.js";
 
-  function log(msg, cls = "") {
-    const line = cls ? `[${cls.toUpperCase()}] ${msg}` : msg;
-    logEl.textContent += line + "\n";
-    logEl.scrollTop = logEl.scrollHeight;
-  }
+    // -----------------------------
+    // Defaults (edit these)
+    // -----------------------------
+    const DEFAULTS = {
+      PLAYFAB_TITLE_ID: "1E3DA1",
+      AVATURN_SUBDOMAIN: "msocial"
+    };
 
-  async function playfabPost(titleId, path, body, headers = {}) {
-    const url = `https://${titleId}.playfabapi.com/${path}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...headers
-      },
-      body: JSON.stringify(body)
-    });
-    const json = await res.json().catch(() => null);
-    if (!res.ok || !json || json.error) {
-      const errMsg = json?.errorMessage || json?.error || `HTTP ${res.status}`;
-      throw new Error(`${path} failed: ${errMsg}`);
+    // -----------------------------
+    // Tiny UI helpers
+    // -----------------------------
+    const $ = (id) => document.getElementById(id);
+    const logEl = $("log");
+    function log(msg, cls="") {
+      const line = cls ? `[${cls.toUpperCase()}] ${msg}` : msg;
+      logEl.textContent += line + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
     }
-    return json.data;
-  }
+    function setText(id, text, cls="") {
+      const el = $(id);
+      el.className = cls ? cls : "";
+      el.textContent = text;
+    }
+    function show(id) { $(id).classList.remove("hidden"); }
+    function hide(id) { $(id).classList.add("hidden"); }
 
-  // ------------------------------
-  // State
-  // ------------------------------
-  let sessionTicket = null;
-  let entityToken = null;
-  let entity = null; // {Id, Type}
-  let recordedAudioBlob = null;
+    // -----------------------------
+    // State
+    // -----------------------------
+    let sessionTicket = null;
+    let entityToken = null;
+    let entity = null;          // {Id, Type}
+    let avaturnModelUrl = null; // from Avaturn export
+    let recordedAudioBlob = null;
 
-  // ------------------------------
-  // Login flow (email/password)
-  // ------------------------------
-  $("btnLogin").addEventListener("click", async () => {
-    const titleId = $("titleId").value.trim();
-    const email = $("email").value.trim();
-    const password = $("password").value;
+    // -----------------------------
+    // Storage keys
+    // -----------------------------
+    const SS = {
+      titleId: "pf_titleId",
+      avaturnSubdomain: "avaturn_subdomain",
+      sessionTicket: "pf_sessionTicket",
+      entityToken: "pf_entityToken",
+      entity: "pf_entity"
+    };
 
-    if (!titleId) return alert("Set TitleId");
-    if (!email || !password) return alert("Enter email + password");
+    // Player data key for 1-reel-per-user
+    const PRIMARY_REEL_KEY = "PrimaryReelItemId";
 
-    try {
+    // -----------------------------
+    // PlayFab HTTP
+    // -----------------------------
+    async function playfabPost(titleId, path, body, headers = {}) {
+      const url = `https://${titleId}.playfabapi.com/${path}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify(body)
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json || json.error) {
+        const errMsg = json?.errorMessage || json?.error || `HTTP ${res.status}`;
+        throw new Error(`${path} failed: ${errMsg}`);
+      }
+      return json.data;
+    }
+
+    function getTitleId() {
+      const v = $("titleId").value.trim();
+      if (!v) throw new Error("TitleId is missing");
+      return v;
+    }
+
+    // Azure blob PUT for PlayFab CreateUploadUrls
+    async function putToAzureBlob(uploadUrlWithToken, blobOrFile) {
+      const res = await fetch(uploadUrlWithToken, {
+        method: "PUT",
+        headers: {
+          "x-ms-blob-type": "BlockBlob",
+          "comp": "blob"
+        },
+        body: blobOrFile
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`Azure PUT failed: HTTP ${res.status} ${txt}`.trim());
+      }
+    }
+
+    // -----------------------------
+    // Token persistence (sessionStorage)
+    // -----------------------------
+    function saveSession() {
+      sessionStorage.setItem(SS.titleId, $("titleId").value.trim());
+      sessionStorage.setItem(SS.avaturnSubdomain, $("avaturnSubdomain").value.trim());
+      sessionStorage.setItem(SS.sessionTicket, sessionTicket || "");
+      sessionStorage.setItem(SS.entityToken, entityToken || "");
+      sessionStorage.setItem(SS.entity, entity ? JSON.stringify(entity) : "");
+    }
+
+    function loadSession() {
+      const t = sessionStorage.getItem(SS.titleId);
+      const a = sessionStorage.getItem(SS.avaturnSubdomain);
+      if (t) $("titleId").value = t;
+      if (a) $("avaturnSubdomain").value = a;
+
+      sessionTicket = sessionStorage.getItem(SS.sessionTicket) || null;
+      entityToken = sessionStorage.getItem(SS.entityToken) || null;
+      const e = sessionStorage.getItem(SS.entity);
+      entity = e ? JSON.parse(e) : null;
+    }
+
+    function clearSession() {
+      sessionStorage.removeItem(SS.titleId);
+      sessionStorage.removeItem(SS.avaturnSubdomain);
+      sessionStorage.removeItem(SS.sessionTicket);
+      sessionStorage.removeItem(SS.entityToken);
+      sessionStorage.removeItem(SS.entity);
+      sessionTicket = null;
+      entityToken = null;
+      entity = null;
+      avaturnModelUrl = null;
+      recordedAudioBlob = null;
+    }
+
+    // -----------------------------
+    // Login + EntityToken
+    // -----------------------------
+    async function loginUsernamePassword() {
+      const titleId = getTitleId();
+      const username = $("username").value.trim();
+      const password = $("password").value;
+
+      if (!username || !password) throw new Error("Enter username and password");
+
+      setText("loginStatus", "Logging in...", "muted");
       log("Logging in...");
-      $("loginStatus").textContent = "Logging in...";
-      // Client/LoginWithEmailAddress
-      const loginData = await playfabPost(titleId, "Client/LoginWithEmailAddress", {
-        Email: email,
+
+      const loginData = await playfabPost(titleId, "Client/LoginWithPlayFab", {
+        Username: username,
         Password: password,
         TitleId: titleId
       });
+
       sessionTicket = loginData.SessionTicket;
       log("Login OK. SessionTicket acquired.", "ok");
 
-      // Get EntityToken (needed for Economy/UGC calls)
-      // This endpoint is /Authentication/GetEntityToken. :contentReference[oaicite:8]{index=8}
-      // Passing X-Authorization (session ticket) is the common client flow.
       const entData = await playfabPost(
         titleId,
         "Authentication/GetEntityToken",
@@ -175,228 +276,368 @@
       );
 
       entityToken = entData.EntityToken;
-      entity = entData.Entity; // {Id, Type}
+      entity = entData.Entity;
       log(`EntityToken OK. Entity: ${entity.Type} / ${entity.Id}`, "ok");
 
-      $("loginStatus").innerHTML = `<span class="ok">Logged in.</span> Entity: ${entity.Type}`;
-      $("uploadBox").classList.remove("hidden");
-    } catch (e) {
-      console.error(e);
-      log(e.message, "bad");
-      $("loginStatus").innerHTML = `<span class="bad">${e.message}</span>`;
+      saveSession();
+
+      setText("loginStatus", "Logged in ✅", "ok");
+      show("avaturnBox");
+      show("audioBox");
+      show("submitBox");
+
+      await initAvaturn();
     }
-  });
 
-  // ------------------------------
-  // Audio recording: exact 5 seconds
-  // ------------------------------
-  let mediaRecorder = null;
-  let recChunks = [];
-  let recTimer = null;
+    // -----------------------------
+    // Avaturn integration
+    // -----------------------------
+    let avaturnSdk = null;
+    async function initAvaturn() {
+      const subdomain = $("avaturnSubdomain").value.trim();
+      if (!subdomain) throw new Error("Avaturn subdomain missing");
 
-  async function startRecording5s() {
-    recordedAudioBlob = null;
-    $("audioPreview").classList.add("hidden");
-    $("audioPreview").src = "";
-    $("audioFile").value = "";
+      const container = $("avaturn-sdk-container");
+      container.innerHTML = "";
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeCandidates = [
-      "audio/webm;codecs=opus",
-      "audio/webm",
-      "audio/ogg;codecs=opus",
-      "audio/ogg"
-    ];
-    const mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || "";
+      const url = `https://${subdomain}.avaturn.dev`;
+      log(`Initializing Avaturn: ${url}`);
 
-    recChunks = [];
-    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) recChunks.push(ev.data); };
-    mediaRecorder.onstop = () => {
-      // Stop mic tracks
-      stream.getTracks().forEach(t => t.stop());
+      avaturnSdk = new AvaturnSDK();
+      await avaturnSdk.init(container, { url });
 
-      const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-      recordedAudioBlob = blob;
+      $("avaturnPill").textContent = "Waiting for export…";
+      $("avaturnStatus").textContent = "Create avatar, then click Next/Export.";
 
-      const url = URL.createObjectURL(blob);
-      $("audioPreview").src = url;
-      $("audioPreview").classList.remove("hidden");
+      avaturnSdk.on("export", (data) => {
+        console.log("Avaturn export data:", data);
 
-      log(`Recorded audio blob: ${blob.type}, ${blob.size} bytes`, "ok");
-      $("recStatus").textContent = "Recorded 5 seconds ✅";
-    };
+        // Avaturn’s export payload shape can vary by setup.
+        // We’ll try common fields. If none match, you’ll see it in console.
+        const candidate =
+          data?.url ||
+          data?.modelUrl ||
+          data?.model ||
+          data?.avatar?.url ||
+          data?.avatar?.modelUrl ||
+          data?.exports?.[0]?.url ||
+          data?.exports?.[0]?.modelUrl ||
+          null;
 
-    mediaRecorder.start();
-    $("recStatus").textContent = "Recording… (auto stops at 5s)";
-    $("btnRec").disabled = true;
-    $("btnStop").disabled = false;
+        if (!candidate) {
+          $("avaturnPill").textContent = "Export received (check console)";
+          $("avaturnStatus").textContent =
+            "Export callback received but no URL was auto-detected. Open console and tell me the field names.";
+          log("Avaturn export received but model URL not found. Check console.", "bad");
+          return;
+        }
 
-    // Auto-stop at 5 seconds
-    recTimer = setTimeout(() => stopRecording(), 5000);
-  }
-
-  function stopRecording() {
-    try {
-      if (recTimer) clearTimeout(recTimer);
-      recTimer = null;
-      if (mediaRecorder && mediaRecorder.state !== "inactive") {
-        mediaRecorder.stop();
-      }
-    } finally {
-      $("btnRec").disabled = false;
-      $("btnStop").disabled = true;
+        avaturnModelUrl = candidate;
+        $("avaturnPill").textContent = "Avatar exported ✅";
+        $("avaturnStatus").textContent = `Captured model URL.`;
+        log(`Avaturn URL captured: ${avaturnModelUrl}`, "ok");
+      });
     }
-  }
 
-  $("btnRec").addEventListener("click", async () => {
-    try {
-      await startRecording5s();
-    } catch (e) {
-      console.error(e);
-      log(`Recording failed: ${e.message}`, "bad");
-      $("recStatus").textContent = `Recording failed: ${e.message}`;
-      $("btnRec").disabled = false;
-      $("btnStop").disabled = true;
-    }
-  });
+    // -----------------------------
+    // Audio recording (exact 5 seconds)
+    // -----------------------------
+    let mediaRecorder = null;
+    let recChunks = [];
+    let recTimer = null;
 
-  $("btnStop").addEventListener("click", () => stopRecording());
-
-  // If user picks an audio file, prefer that over recorded blob
-  $("audioFile").addEventListener("change", () => {
-    if ($("audioFile").files?.length) {
+    async function startRecording5s() {
       recordedAudioBlob = null;
-      $("recStatus").textContent = "Using uploaded audio file.";
       $("audioPreview").classList.add("hidden");
       $("audioPreview").src = "";
-    }
-  });
 
-  // ------------------------------
-  // Upload & Publish flow
-  // ------------------------------
-  async function putToAzureBlob(uploadUrlWithToken, fileOrBlob) {
-    // PlayFab tutorial says add headers comp: blob and x-ms-blob-type: blockblob for PUT. :contentReference[oaicite:9]{index=9}
-    const res = await fetch(uploadUrlWithToken, {
-      method: "PUT",
-      headers: {
-        "x-ms-blob-type": "BlockBlob",
-        "comp": "blob"
-      },
-      body: fileOrBlob
-    });
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(`Azure PUT failed: HTTP ${res.status} ${txt}`.trim());
-    }
-  }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-  $("btnUpload").addEventListener("click", async () => {
-    const titleId = $("titleId").value.trim();
-    const contentType = $("contentType").value.trim() || "Reel";
-    const itemTitle = $("itemTitle").value.trim() || "Spotlight Reel";
-
-    if (!titleId || !sessionTicket || !entityToken) return alert("Login first");
-    const model = $("modelFile").files?.[0];
-    if (!model) return alert("Pick a .glb model file");
-
-    let audioBlobOrFile = null;
-    const audioFile = $("audioFile").files?.[0];
-    if (audioFile) audioBlobOrFile = audioFile;
-    else if (recordedAudioBlob) audioBlobOrFile = recordedAudioBlob;
-
-    if (!audioBlobOrFile) return alert("Record 5s audio OR upload an audio file");
-
-    try {
-      $("uploadStatus").textContent = "Creating upload URLs…";
-      log("CreateUploadUrls...");
-
-      // 1) CreateUploadUrls
-      const filesReq = [
-        { FileName: model.name, FileSize: model.size },
-        { FileName: audioFile ? audioFile.name : `voice_${Date.now()}.webm`, FileSize: audioBlobOrFile.size }
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/ogg"
       ];
+      const mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || "";
+
+      recChunks = [];
+      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+      mediaRecorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) recChunks.push(ev.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+        recordedAudioBlob = blob;
+
+        const url = URL.createObjectURL(blob);
+        $("audioPreview").src = url;
+        $("audioPreview").classList.remove("hidden");
+
+        setText("recStatus", `Recorded ✅ (${blob.size} bytes)`, "ok");
+        log(`Recorded audio: ${blob.type}, ${blob.size} bytes`, "ok");
+      };
+
+      mediaRecorder.start();
+      setText("recStatus", "Recording… auto-stops at 5s", "muted");
+      $("btnRec").disabled = true;
+      $("btnStop").disabled = false;
+
+      recTimer = setTimeout(() => stopRecording(), 5000);
+    }
+
+    function stopRecording() {
+      try {
+        if (recTimer) clearTimeout(recTimer);
+        recTimer = null;
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+          mediaRecorder.stop();
+        }
+      } finally {
+        $("btnRec").disabled = false;
+        $("btnStop").disabled = true;
+      }
+    }
+
+    // -----------------------------
+    // 1 reel per user: store the reel item id in Player ReadOnly Data
+    // -----------------------------
+    async function getPrimaryReelItemId(titleId) {
+      const data = await playfabPost(
+        titleId,
+        "Client/GetUserData",
+        { Keys: [PRIMARY_REEL_KEY] },
+        { "X-Authorization": sessionTicket }
+      );
+
+      const val = data?.Data?.[PRIMARY_REEL_KEY]?.Value || null;
+      return val;
+    }
+
+    async function setPrimaryReelItemId(titleId, itemId) {
+      await playfabPost(
+        titleId,
+        "Client/UpdateUserData",
+        { Data: { [PRIMARY_REEL_KEY]: itemId } },
+        { "X-Authorization": sessionTicket }
+      );
+    }
+
+    // -----------------------------
+    // Create/Update UGC item (voice only) + metadata (avaturn url + anim index)
+    // -----------------------------
+    async function uploadVoiceAndUpsertReel() {
+      const titleId = getTitleId();
+      const itemTitle = $("itemTitle").value.trim() || "Spotlight Reel";
+      const animIndex = $("animIndex").value;
+
+      if (!sessionTicket || !entityToken) throw new Error("Not logged in");
+      if (!avaturnModelUrl) throw new Error("Export avatar in Avaturn first");
+      if (!recordedAudioBlob) throw new Error("Record 5s audio first");
+
+      // Small safety: size cap (keeps abuse down in testing)
+      if (recordedAudioBlob.size > 700_000) {
+        throw new Error("Audio too large. Please record again (should be small for 5s).");
+      }
+
+      setText("submitStatus", "Checking existing reel…", "muted");
+      log("Checking PrimaryReelItemId...");
+
+      let existingItemId = await getPrimaryReelItemId(titleId);
+      log(existingItemId ? `Found PrimaryReelItemId: ${existingItemId}` : "No reel yet. Will create.", "ok");
+
+      // 1) CreateUploadUrls for voice only
+      const voiceName = `voice_${Date.now()}.webm`;
+      setText("submitStatus", "Creating upload URL…", "muted");
+      log("Catalog/CreateUploadUrls (voice only) ...");
 
       const upData = await playfabPost(
         titleId,
         "Catalog/CreateUploadUrls",
-        { Files: filesReq },
-        { "X-EntityToken": entityToken }
-      ); // :contentReference[oaicite:10]{index=10}
-
-      const uploadUrls = upData.UploadUrls;
-      if (!Array.isArray(uploadUrls) || uploadUrls.length < 2) {
-        throw new Error("CreateUploadUrls returned unexpected data");
-      }
-
-      // Match by filename
-      const modelUp = uploadUrls.find(u => u.FileName === model.name);
-      const audioName = filesReq[1].FileName;
-      const audioUp = uploadUrls.find(u => u.FileName === audioName);
-
-      if (!modelUp || !audioUp) throw new Error("Could not match upload URLs to files");
-
-      // 2) Upload bytes to Azure
-      $("uploadStatus").textContent = "Uploading model…";
-      log(`Uploading model to Azure blob: ${modelUp.FileName} (${model.size} bytes)`);
-      await putToAzureBlob(modelUp.Url, model);
-      log("Model upload OK.", "ok");
-
-      $("uploadStatus").textContent = "Uploading audio…";
-      log(`Uploading audio to Azure blob: ${audioUp.FileName} (${audioBlobOrFile.size} bytes)`);
-      await putToAzureBlob(audioUp.Url, audioBlobOrFile);
-      log("Audio upload OK.", "ok");
-
-      // IMPORTANT:
-      // The Url returned by CreateUploadUrls contains a token for upload.
-      // For attaching to the item, use the base URL without query string.
-      const modelUrlBase = modelUp.Url.split("?")[0];
-      const audioUrlBase = audioUp.Url.split("?")[0];
-
-      // 3) CreateDraftItem (Publish true to publish immediately) :contentReference[oaicite:11]{index=11}
-      $("uploadStatus").textContent = "Creating & publishing UGC item…";
-      log("CreateDraftItem (Publish=true)...");
-
-      const draftReq = {
-        Item: {
-          Type: "ugc",
-          Title: { NEUTRAL: itemTitle },
-          Description: { NEUTRAL: "Spotlight reel test upload" },
-          IsHidden: false,
-          Contents: [
-            { Id: modelUp.Id, Url: modelUrlBase },
-            { Id: audioUp.Id, Url: audioUrlBase }
-          ],
-          // Optional: store your “animation index” later in Tags or CustomData
-          // Tags: ["spotlight-reel"]
-        },
-        Publish: true,
-        AllowOverwrite: false
-      };
-
-      const created = await playfabPost(
-        titleId,
-        "Catalog/CreateDraftItem",
-        draftReq,
+        { Files: [{ FileName: voiceName, FileSize: recordedAudioBlob.size }] },
         { "X-EntityToken": entityToken }
       );
 
-      const itemId = created?.Item?.Id;
-      log(`UGC created & publish requested. ItemId: ${itemId}`, "ok");
-      $("uploadStatus").innerHTML = `<span class="ok">Done ✅</span> ItemId: ${itemId}`;
+      const voiceUp = upData?.UploadUrls?.[0];
+      if (!voiceUp?.Url || !voiceUp?.Id) throw new Error("CreateUploadUrls returned unexpected data");
 
-      log("Next: in your game, you’ll use SearchItems/GetItem to discover and fetch this reel.", "ok");
-    } catch (e) {
-      console.error(e);
-      log(e.message, "bad");
-      $("uploadStatus").innerHTML = `<span class="bad">${e.message}</span>`;
+      // 2) PUT voice blob
+      setText("submitStatus", "Uploading voice…", "muted");
+      log(`Uploading voice: ${voiceName} (${recordedAudioBlob.size} bytes)`);
+      await putToAzureBlob(voiceUp.Url, recordedAudioBlob);
+      log("Voice upload OK.", "ok");
+
+      const voiceUrlBase = voiceUp.Url.split("?")[0];
+
+      // 3) Create or Update the UGC item
+      // We'll store avaturnModelUrl + animationIndex in DisplayProperties.
+      // We omit ContentType to avoid your earlier content-type config error.
+      const displayProps = {
+        avaturnModelUrl,
+        animationIndex: String(animIndex),
+        updatedAt: new Date().toISOString()
+      };
+
+      if (!existingItemId) {
+        setText("submitStatus", "Creating reel item…", "muted");
+        log("Catalog/CreateDraftItem (Publish=true) ...");
+
+        const created = await playfabPost(
+          titleId,
+          "Catalog/CreateDraftItem",
+          {
+            Item: {
+              Type: "ugc",
+              Title: { NEUTRAL: itemTitle },
+              Description: { NEUTRAL: "Spotlight reel (voice + avaturn url)" },
+              IsHidden: false,
+              //Tags: ["spotlight-reel"],
+              DisplayProperties: displayProps,
+              Contents: [
+                { Id: voiceUp.Id, Url: voiceUrlBase }
+              ]
+            },
+            Publish: true,
+            AllowOverwrite: false
+          },
+          { "X-EntityToken": entityToken }
+        );
+
+        const newId = created?.Item?.Id;
+        if (!newId) throw new Error("CreateDraftItem succeeded but no Item.Id returned");
+
+        // Save pointer for 1 reel per user
+        await setPrimaryReelItemId(titleId, newId);
+        log(`Saved ${PRIMARY_REEL_KEY} = ${newId}`, "ok");
+
+        setText("submitStatus", `Created ✅ ItemId: ${newId}`, "ok");
+        log(`Reel created & published. ItemId: ${newId}`, "ok");
+      } else {
+        // Update existing item
+        setText("submitStatus", "Updating reel item…", "muted");
+        log("Catalog/UpdateDraftItem ...");
+
+        // Overwrite the draft for the same item id and publish immediately
+      await playfabPost(
+        titleId,
+        "Catalog/CreateDraftItem",
+        {
+          Item: {
+            Id: existingItemId,
+            Type: "ugc",
+            Title: { NEUTRAL: itemTitle },
+            Description: { NEUTRAL: "Spotlight reel (voice + avaturn url)" },
+            IsHidden: false,
+            DisplayProperties: displayProps,
+            Contents: [
+              { Id: voiceUp.Id, Url: voiceUrlBase }
+            ]
+          },
+          Publish: true,
+          AllowOverwrite: true
+        },
+        { "X-EntityToken": entityToken }
+      );
+
+
+        // Publish update
+        setText("submitStatus", "Publishing update…", "muted");
+        log("Catalog/PublishDraftItem ...");
+
+        await playfabPost(
+          titleId,
+          "Catalog/PublishDraftItem",
+          { Id: existingItemId },
+          { "X-EntityToken": entityToken }
+        );
+
+        setText("submitStatus", `Updated ✅ ItemId: ${existingItemId}`, "ok");
+        log(`Reel updated & published. ItemId: ${existingItemId}`, "ok");
+      }
     }
-  });
 
-  // Initial message
-  log("1) Fill TitleId\n2) Login\n3) Pick model + record/upload audio\n4) Upload & publish\n");
-})();
-</script>
+    // -----------------------------
+    // Wire UI
+    // -----------------------------
+    $("btnUseDefaults").addEventListener("click", () => {
+      $("titleId").value = DEFAULTS.PLAYFAB_TITLE_ID;
+      $("avaturnSubdomain").value = DEFAULTS.AVATURN_SUBDOMAIN;
+      setText("cfgStatus", "Defaults filled.", "muted");
+      saveSession();
+    });
+
+    $("btnClearSession").addEventListener("click", () => {
+      clearSession();
+      setText("cfgStatus", "Session cleared. Refresh page.", "muted");
+      setText("loginStatus", "", "muted");
+      hide("avaturnBox"); hide("audioBox"); hide("submitBox");
+      log("Session cleared.", "ok");
+    });
+
+    $("btnLogin").addEventListener("click", async () => {
+      try {
+        await loginUsernamePassword();
+      } catch (e) {
+        console.error(e);
+        setText("loginStatus", e.message, "bad");
+        log(e.message, "bad");
+      }
+    });
+
+    $("btnRec").addEventListener("click", async () => {
+      try {
+        await startRecording5s();
+      } catch (e) {
+        console.error(e);
+        setText("recStatus", e.message, "bad");
+        log(`Recording failed: ${e.message}`, "bad");
+        $("btnRec").disabled = false;
+        $("btnStop").disabled = true;
+      }
+    });
+
+    $("btnStop").addEventListener("click", () => stopRecording());
+
+    $("btnSubmit").addEventListener("click", async () => {
+      try {
+        setText("submitStatus", "Working…", "muted");
+        await uploadVoiceAndUpsertReel();
+      } catch (e) {
+        console.error(e);
+        setText("submitStatus", e.message, "bad");
+        log(e.message, "bad");
+      }
+    });
+
+    // -----------------------------
+    // Auto-restore session if present
+    // -----------------------------
+    (function boot() {
+      loadSession();
+
+      // Fill defaults if empty
+      if (!$("titleId").value.trim()) $("titleId").value = DEFAULTS.PLAYFAB_TITLE_ID;
+      if (!$("avaturnSubdomain").value.trim()) $("avaturnSubdomain").value = DEFAULTS.AVATURN_SUBDOMAIN;
+
+      if (sessionTicket && entityToken && entity) {
+        setText("loginStatus", "Session restored ✅", "ok");
+        show("avaturnBox");
+        show("audioBox");
+        show("submitBox");
+        log(`Session restored. Entity: ${entity.Type} / ${entity.Id}`, "ok");
+
+        // Load Avaturn automatically
+        initAvaturn().catch(err => {
+          log(`Avaturn init failed: ${err.message}`, "bad");
+          $("avaturnStatus").textContent = err.message;
+        });
+      } else {
+        log("Ready. Login to begin.");
+      }
+    })();
+  </script>
 </body>
 </html>
