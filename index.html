@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Spotlight Reel UGC Test</title>
+  <style>
+    body { font-family: system-ui, Arial; max-width: 900px; margin: 24px auto; padding: 0 12px; }
+    fieldset { margin: 16px 0; padding: 12px; }
+    label { display:block; margin-top: 8px; }
+    input, button, select { padding: 8px; margin-top: 6px; }
+    button { cursor: pointer; }
+    .row { display:flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .muted { color:#666; font-size: 13px; }
+    #log { white-space: pre-wrap; background:#0b1020; color:#e8ecff; padding: 12px; border-radius: 8px; min-height: 120px; }
+    .ok { color: #1b8a3a; }
+    .bad { color: #b42318; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+  <h1>Spotlight Reel UGC Test</h1>
+  <p class="muted">Minimal end-to-end: login → upload model + 5s audio → create/publish UGC item.</p>
+
+  <fieldset>
+    <legend>0) Configure</legend>
+    <label>PlayFab TitleId</label>
+    <input id="titleId" placeholder="YOUR_TITLE_ID" />
+
+    <label>UGC ContentType (must exist in your title config)</label>
+    <input id="contentType" value="Reel" />
+
+    <p class="muted">
+      If you get “content type isn’t supported”, add this ContentType in Game Manager:
+      Economy → Settings (Catalog v2 config). :contentReference[oaicite:6]{index=6}
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>1) Login (no register)</legend>
+    <div class="row">
+      <div style="flex:1; min-width: 240px;">
+        <label>Email</label>
+        <input id="email" type="email" placeholder="email@example.com" />
+      </div>
+      <div style="flex:1; min-width: 240px;">
+        <label>Password</label>
+        <input id="password" type="password" placeholder="password" />
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button id="btnLogin">Login</button>
+      </div>
+    </div>
+
+    <div id="loginStatus" class="muted"></div>
+  </fieldset>
+
+  <fieldset id="uploadBox" class="hidden">
+    <legend>2) Pick model + audio</legend>
+
+    <label>Model file (.glb)</label>
+    <input id="modelFile" type="file" accept=".glb,model/gltf-binary" />
+
+    <fieldset>
+      <legend>Audio (choose one)</legend>
+
+      <div class="row">
+        <button id="btnRec" type="button">Record 5s</button>
+        <button id="btnStop" type="button" disabled>Stop</button>
+        <span id="recStatus" class="muted"></span>
+      </div>
+
+      <div style="margin-top: 10px;">
+        <audio id="audioPreview" controls class="hidden"></audio>
+      </div>
+
+      <label>OR upload audio file (mp3/webm/wav/m4a)</label>
+      <input id="audioFile" type="file" accept="audio/*" />
+
+      <p class="muted">
+        Recording path auto-stops at 5 seconds. Upload path does not trim; it only uploads what you pick.
+      </p>
+    </fieldset>
+
+    <label>Item Title (stored in UGC metadata)</label>
+    <input id="itemTitle" value="Spotlight Reel" />
+
+    <div class="row" style="margin-top: 12px;">
+      <button id="btnUpload" type="button">Upload & Publish UGC</button>
+      <span id="uploadStatus" class="muted"></span>
+    </div>
+
+    <p class="muted">
+      Upload uses CreateUploadUrls → PUT to Azure Blob (x-ms-blob-type: blockblob) → CreateDraftItem(Publish=true). :contentReference[oaicite:7]{index=7}
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Log</legend>
+    <div id="log"></div>
+  </fieldset>
+
+<script>
+(() => {
+  // ------------------------------
+  // Helpers
+  // ------------------------------
+  const $ = (id) => document.getElementById(id);
+  const logEl = $("log");
+
+  function log(msg, cls = "") {
+    const line = cls ? `[${cls.toUpperCase()}] ${msg}` : msg;
+    logEl.textContent += line + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  async function playfabPost(titleId, path, body, headers = {}) {
+    const url = `https://${titleId}.playfabapi.com/${path}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...headers
+      },
+      body: JSON.stringify(body)
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json || json.error) {
+      const errMsg = json?.errorMessage || json?.error || `HTTP ${res.status}`;
+      throw new Error(`${path} failed: ${errMsg}`);
+    }
+    return json.data;
+  }
+
+  // ------------------------------
+  // State
+  // ------------------------------
+  let sessionTicket = null;
+  let entityToken = null;
+  let entity = null; // {Id, Type}
+  let recordedAudioBlob = null;
+
+  // ------------------------------
+  // Login flow (email/password)
+  // ------------------------------
+  $("btnLogin").addEventListener("click", async () => {
+    const titleId = $("titleId").value.trim();
+    const email = $("email").value.trim();
+    const password = $("password").value;
+
+    if (!titleId) return alert("Set TitleId");
+    if (!email || !password) return alert("Enter email + password");
+
+    try {
+      log("Logging in...");
+      $("loginStatus").textContent = "Logging in...";
+      // Client/LoginWithEmailAddress
+      const loginData = await playfabPost(titleId, "Client/LoginWithEmailAddress", {
+        Email: email,
+        Password: password,
+        TitleId: titleId
+      });
+      sessionTicket = loginData.SessionTicket;
+      log("Login OK. SessionTicket acquired.", "ok");
+
+      // Get EntityToken (needed for Economy/UGC calls)
+      // This endpoint is /Authentication/GetEntityToken. :contentReference[oaicite:8]{index=8}
+      // Passing X-Authorization (session ticket) is the common client flow.
+      const entData = await playfabPost(
+        titleId,
+        "Authentication/GetEntityToken",
+        {},
+        { "X-Authorization": sessionTicket }
+      );
+
+      entityToken = entData.EntityToken;
+      entity = entData.Entity; // {Id, Type}
+      log(`EntityToken OK. Entity: ${entity.Type} / ${entity.Id}`, "ok");
+
+      $("loginStatus").innerHTML = `<span class="ok">Logged in.</span> Entity: ${entity.Type}`;
+      $("uploadBox").classList.remove("hidden");
+    } catch (e) {
+      console.error(e);
+      log(e.message, "bad");
+      $("loginStatus").innerHTML = `<span class="bad">${e.message}</span>`;
+    }
+  });
+
+  // ------------------------------
+  // Audio recording: exact 5 seconds
+  // ------------------------------
+  let mediaRecorder = null;
+  let recChunks = [];
+  let recTimer = null;
+
+  async function startRecording5s() {
+    recordedAudioBlob = null;
+    $("audioPreview").classList.add("hidden");
+    $("audioPreview").src = "";
+    $("audioFile").value = "";
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeCandidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+      "audio/ogg"
+    ];
+    const mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || "";
+
+    recChunks = [];
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) recChunks.push(ev.data); };
+    mediaRecorder.onstop = () => {
+      // Stop mic tracks
+      stream.getTracks().forEach(t => t.stop());
+
+      const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      recordedAudioBlob = blob;
+
+      const url = URL.createObjectURL(blob);
+      $("audioPreview").src = url;
+      $("audioPreview").classList.remove("hidden");
+
+      log(`Recorded audio blob: ${blob.type}, ${blob.size} bytes`, "ok");
+      $("recStatus").textContent = "Recorded 5 seconds ✅";
+    };
+
+    mediaRecorder.start();
+    $("recStatus").textContent = "Recording… (auto stops at 5s)";
+    $("btnRec").disabled = true;
+    $("btnStop").disabled = false;
+
+    // Auto-stop at 5 seconds
+    recTimer = setTimeout(() => stopRecording(), 5000);
+  }
+
+  function stopRecording() {
+    try {
+      if (recTimer) clearTimeout(recTimer);
+      recTimer = null;
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+    } finally {
+      $("btnRec").disabled = false;
+      $("btnStop").disabled = true;
+    }
+  }
+
+  $("btnRec").addEventListener("click", async () => {
+    try {
+      await startRecording5s();
+    } catch (e) {
+      console.error(e);
+      log(`Recording failed: ${e.message}`, "bad");
+      $("recStatus").textContent = `Recording failed: ${e.message}`;
+      $("btnRec").disabled = false;
+      $("btnStop").disabled = true;
+    }
+  });
+
+  $("btnStop").addEventListener("click", () => stopRecording());
+
+  // If user picks an audio file, prefer that over recorded blob
+  $("audioFile").addEventListener("change", () => {
+    if ($("audioFile").files?.length) {
+      recordedAudioBlob = null;
+      $("recStatus").textContent = "Using uploaded audio file.";
+      $("audioPreview").classList.add("hidden");
+      $("audioPreview").src = "";
+    }
+  });
+
+  // ------------------------------
+  // Upload & Publish flow
+  // ------------------------------
+  async function putToAzureBlob(uploadUrlWithToken, fileOrBlob) {
+    // PlayFab tutorial says add headers comp: blob and x-ms-blob-type: blockblob for PUT. :contentReference[oaicite:9]{index=9}
+    const res = await fetch(uploadUrlWithToken, {
+      method: "PUT",
+      headers: {
+        "x-ms-blob-type": "BlockBlob",
+        "comp": "blob"
+      },
+      body: fileOrBlob
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`Azure PUT failed: HTTP ${res.status} ${txt}`.trim());
+    }
+  }
+
+  $("btnUpload").addEventListener("click", async () => {
+    const titleId = $("titleId").value.trim();
+    const contentType = $("contentType").value.trim() || "Reel";
+    const itemTitle = $("itemTitle").value.trim() || "Spotlight Reel";
+
+    if (!titleId || !sessionTicket || !entityToken) return alert("Login first");
+    const model = $("modelFile").files?.[0];
+    if (!model) return alert("Pick a .glb model file");
+
+    let audioBlobOrFile = null;
+    const audioFile = $("audioFile").files?.[0];
+    if (audioFile) audioBlobOrFile = audioFile;
+    else if (recordedAudioBlob) audioBlobOrFile = recordedAudioBlob;
+
+    if (!audioBlobOrFile) return alert("Record 5s audio OR upload an audio file");
+
+    try {
+      $("uploadStatus").textContent = "Creating upload URLs…";
+      log("CreateUploadUrls...");
+
+      // 1) CreateUploadUrls
+      const filesReq = [
+        { FileName: model.name, FileSize: model.size },
+        { FileName: audioFile ? audioFile.name : `voice_${Date.now()}.webm`, FileSize: audioBlobOrFile.size }
+      ];
+
+      const upData = await playfabPost(
+        titleId,
+        "Catalog/CreateUploadUrls",
+        { Files: filesReq },
+        { "X-EntityToken": entityToken }
+      ); // :contentReference[oaicite:10]{index=10}
+
+      const uploadUrls = upData.UploadUrls;
+      if (!Array.isArray(uploadUrls) || uploadUrls.length < 2) {
+        throw new Error("CreateUploadUrls returned unexpected data");
+      }
+
+      // Match by filename
+      const modelUp = uploadUrls.find(u => u.FileName === model.name);
+      const audioName = filesReq[1].FileName;
+      const audioUp = uploadUrls.find(u => u.FileName === audioName);
+
+      if (!modelUp || !audioUp) throw new Error("Could not match upload URLs to files");
+
+      // 2) Upload bytes to Azure
+      $("uploadStatus").textContent = "Uploading model…";
+      log(`Uploading model to Azure blob: ${modelUp.FileName} (${model.size} bytes)`);
+      await putToAzureBlob(modelUp.Url, model);
+      log("Model upload OK.", "ok");
+
+      $("uploadStatus").textContent = "Uploading audio…";
+      log(`Uploading audio to Azure blob: ${audioUp.FileName} (${audioBlobOrFile.size} bytes)`);
+      await putToAzureBlob(audioUp.Url, audioBlobOrFile);
+      log("Audio upload OK.", "ok");
+
+      // IMPORTANT:
+      // The Url returned by CreateUploadUrls contains a token for upload.
+      // For attaching to the item, use the base URL without query string.
+      const modelUrlBase = modelUp.Url.split("?")[0];
+      const audioUrlBase = audioUp.Url.split("?")[0];
+
+      // 3) CreateDraftItem (Publish true to publish immediately) :contentReference[oaicite:11]{index=11}
+      $("uploadStatus").textContent = "Creating & publishing UGC item…";
+      log("CreateDraftItem (Publish=true)...");
+
+      const draftReq = {
+        Item: {
+          Type: "ugc",
+          Title: { NEUTRAL: itemTitle },
+          Description: { NEUTRAL: "Spotlight reel test upload" },
+          IsHidden: false,
+          Contents: [
+            { Id: modelUp.Id, Url: modelUrlBase },
+            { Id: audioUp.Id, Url: audioUrlBase }
+          ],
+          // Optional: store your “animation index” later in Tags or CustomData
+          // Tags: ["spotlight-reel"]
+        },
+        Publish: true,
+        AllowOverwrite: false
+      };
+
+      const created = await playfabPost(
+        titleId,
+        "Catalog/CreateDraftItem",
+        draftReq,
+        { "X-EntityToken": entityToken }
+      );
+
+      const itemId = created?.Item?.Id;
+      log(`UGC created & publish requested. ItemId: ${itemId}`, "ok");
+      $("uploadStatus").innerHTML = `<span class="ok">Done ✅</span> ItemId: ${itemId}`;
+
+      log("Next: in your game, you’ll use SearchItems/GetItem to discover and fetch this reel.", "ok");
+    } catch (e) {
+      console.error(e);
+      log(e.message, "bad");
+      $("uploadStatus").innerHTML = `<span class="bad">${e.message}</span>`;
+    }
+  });
+
+  // Initial message
+  log("1) Fill TitleId\n2) Login\n3) Pick model + record/upload audio\n4) Upload & publish\n");
+})();
+</script>
+</body>
+</html>
