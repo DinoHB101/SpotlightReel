@@ -25,7 +25,7 @@
 <body>
   <h1>Spotlight Reel Creator</h1>
   <p class="muted">
-    Flow: Login → Create avatar (Avaturn) → Record 5s voice → Create/Update single UGC reel.
+    Flow: Login → Create avatar (Avaturn) → Record 5s voice (WAV) → Create/Update single UGC reel.
   </p>
 
   <fieldset>
@@ -106,9 +106,9 @@
     <div class="muted" style="margin-top: 10px;">
       We store:
       <ul>
-        <li>Voice file in UGC contents</li>
+        <li>Voice file in UGC contents (WAV)</li>
         <li>Avaturn URL + animationIndex in item metadata</li>
-        <li>PrimaryReelItemId in Player ReadOnly Data</li>
+        <li>PrimaryReelItemId in UserData</li>
       </ul>
     </div>
   </fieldset>
@@ -310,10 +310,6 @@
       $("avaturnStatus").textContent = "Create avatar, then click Next/Export.";
 
       avaturnSdk.on("export", (data) => {
-        console.log("Avaturn export data:", data);
-
-        // Avaturn’s export payload shape can vary by setup.
-        // We’ll try common fields. If none match, you’ll see it in console.
         const candidate =
           data?.url ||
           data?.modelUrl ||
@@ -340,70 +336,137 @@
     }
 
     // -----------------------------
-    // Audio recording (exact 5 seconds)
+    // Audio recording to WAV (exact 5 seconds) — no ffmpeg needed
     // -----------------------------
-    let mediaRecorder = null;
-    let recChunks = [];
-    let recTimer = null;
+    let audioCtx = null;
+    let mediaStream = null;
+    let sourceNode = null;
+    let processorNode = null;
+    let wavSamples = [];
+    let wavSampleRate = 24000;
+    let wavTimer = null;
+    let isWavRecording = false;
+
+    function floatTo16BitPCM(float32Array) {
+      const out = new Int16Array(float32Array.length);
+      for (let i = 0; i < float32Array.length; i++) {
+        let s = Math.max(-1, Math.min(1, float32Array[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return out;
+    }
+
+    function writeWavHeader(view, sampleRate, numSamples, numChannels = 1, bitsPerSample = 16) {
+      const blockAlign = numChannels * bitsPerSample / 8;
+      const byteRate = sampleRate * blockAlign;
+      const dataSize = numSamples * blockAlign;
+
+      function writeStr(offset, str) {
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+      }
+
+      writeStr(0, "RIFF");
+      view.setUint32(4, 36 + dataSize, true);
+      writeStr(8, "WAVE");
+      writeStr(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+      writeStr(36, "data");
+      view.setUint32(40, dataSize, true);
+    }
+
+    function encodeWavFromFloatChunks(chunks, sampleRate) {
+      let totalLength = 0;
+      for (const c of chunks) totalLength += c.length;
+
+      const merged = new Float32Array(totalLength);
+      let offset = 0;
+      for (const c of chunks) { merged.set(c, offset); offset += c.length; }
+
+      const pcm16 = floatTo16BitPCM(merged);
+      const buffer = new ArrayBuffer(44 + pcm16.byteLength);
+      const view = new DataView(buffer);
+
+      writeWavHeader(view, sampleRate, pcm16.length, 1, 16);
+
+      let pos = 44;
+      for (let i = 0; i < pcm16.length; i++, pos += 2) {
+        view.setInt16(pos, pcm16[i], true);
+      }
+
+      return new Blob([buffer], { type: "audio/wav" });
+    }
 
     async function startRecording5s() {
       recordedAudioBlob = null;
       $("audioPreview").classList.add("hidden");
       $("audioPreview").src = "";
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      wavSampleRate = audioCtx.sampleRate;
 
-      const mimeCandidates = [
-        "audio/webm;codecs=opus",
-        "audio/webm",
-        "audio/ogg;codecs=opus",
-        "audio/ogg"
-      ];
-      const mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || "";
+      sourceNode = audioCtx.createMediaStreamSource(mediaStream);
 
-      recChunks = [];
-      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
+      wavSamples = [];
+      isWavRecording = true;
 
-      mediaRecorder.ondataavailable = (ev) => {
-        if (ev.data && ev.data.size > 0) recChunks.push(ev.data);
+      processorNode.onaudioprocess = (e) => {
+        if (!isWavRecording) return;
+        const input = e.inputBuffer.getChannelData(0);
+        wavSamples.push(new Float32Array(input));
       };
 
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || "audio/webm" });
-        recordedAudioBlob = blob;
+      sourceNode.connect(processorNode);
+      processorNode.connect(audioCtx.destination);
 
-        const url = URL.createObjectURL(blob);
-        $("audioPreview").src = url;
-        $("audioPreview").classList.remove("hidden");
+      setText("recStatus", "Recording WAV… auto-stops at 5s", "muted");
+      log(`Recording WAV at ${wavSampleRate} Hz`, "info");
 
-        setText("recStatus", `Recorded ✅ (${blob.size} bytes)`, "ok");
-        log(`Recorded audio: ${blob.type}, ${blob.size} bytes`, "ok");
-      };
-
-      mediaRecorder.start();
-      setText("recStatus", "Recording… auto-stops at 5s", "muted");
       $("btnRec").disabled = true;
       $("btnStop").disabled = false;
 
-      recTimer = setTimeout(() => stopRecording(), 5000);
+      wavTimer = setTimeout(() => stopRecording(), 5000);
     }
 
-    function stopRecording() {
+    async function stopRecording() {
       try {
-        if (recTimer) clearTimeout(recTimer);
-        recTimer = null;
-        if (mediaRecorder && mediaRecorder.state !== "inactive") {
-          mediaRecorder.stop();
-        }
+        if (wavTimer) clearTimeout(wavTimer);
+        wavTimer = null;
+
+        if (!isWavRecording) return;
+        isWavRecording = false;
+
+        if (processorNode) processorNode.disconnect();
+        if (sourceNode) sourceNode.disconnect();
+        if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+        if (audioCtx) await audioCtx.close().catch(() => {});
       } finally {
         $("btnRec").disabled = false;
         $("btnStop").disabled = true;
       }
+
+      const wavBlob = encodeWavFromFloatChunks(wavSamples, wavSampleRate);
+      recordedAudioBlob = wavBlob;
+
+      const url = URL.createObjectURL(wavBlob);
+      $("audioPreview").src = url;
+      $("audioPreview").classList.remove("hidden");
+
+      setText("recStatus", `Recorded WAV ✅ (${wavBlob.size} bytes)`, "ok");
+      log(`Recorded audio: ${wavBlob.type}, ${wavBlob.size} bytes`, "ok");
+
+      wavSamples = [];
     }
 
     // -----------------------------
-    // 1 reel per user: store the reel item id in Player ReadOnly Data
+    // 1 reel per user: store the reel item id in UserData
     // -----------------------------
     async function getPrimaryReelItemId(titleId) {
       const data = await playfabPost(
@@ -412,9 +475,7 @@
         { Keys: [PRIMARY_REEL_KEY] },
         { "X-Authorization": sessionTicket }
       );
-
-      const val = data?.Data?.[PRIMARY_REEL_KEY]?.Value || null;
-      return val;
+      return data?.Data?.[PRIMARY_REEL_KEY]?.Value || null;
     }
 
     async function setPrimaryReelItemId(titleId, itemId) {
@@ -427,7 +488,7 @@
     }
 
     // -----------------------------
-    // Create/Update UGC item (voice only) + metadata (avaturn url + anim index)
+    // Create/Update UGC item + metadata
     // -----------------------------
     async function uploadVoiceAndUpsertReel() {
       const titleId = getTitleId();
@@ -438,9 +499,8 @@
       if (!avaturnModelUrl) throw new Error("Export avatar in Avaturn first");
       if (!recordedAudioBlob) throw new Error("Record 5s audio first");
 
-      // Small safety: size cap (keeps abuse down in testing)
-      if (recordedAudioBlob.size > 700_000) {
-        throw new Error("Audio too large. Please record again (should be small for 5s).");
+      if (recordedAudioBlob.size > 5_000_000) {
+        throw new Error("Audio too large. Please record again.");
       }
 
       setText("submitStatus", "Checking existing reel…", "muted");
@@ -449,8 +509,8 @@
       let existingItemId = await getPrimaryReelItemId(titleId);
       log(existingItemId ? `Found PrimaryReelItemId: ${existingItemId}` : "No reel yet. Will create.", "ok");
 
-      // 1) CreateUploadUrls for voice only
-      const voiceName = `voice_${Date.now()}.webm`;
+      const voiceName = `voice_${Date.now()}.wav`;
+
       setText("submitStatus", "Creating upload URL…", "muted");
       log("Catalog/CreateUploadUrls (voice only) ...");
 
@@ -464,7 +524,6 @@
       const voiceUp = upData?.UploadUrls?.[0];
       if (!voiceUp?.Url || !voiceUp?.Id) throw new Error("CreateUploadUrls returned unexpected data");
 
-      // 2) PUT voice blob
       setText("submitStatus", "Uploading voice…", "muted");
       log(`Uploading voice: ${voiceName} (${recordedAudioBlob.size} bytes)`);
       await putToAzureBlob(voiceUp.Url, recordedAudioBlob);
@@ -472,61 +531,23 @@
 
       const voiceUrlBase = voiceUp.Url.split("?")[0];
 
-      // 3) Create or Update the UGC item
-      // We'll store avaturnModelUrl + animationIndex in DisplayProperties.
-      // We omit ContentType to avoid your earlier content-type config error.
       const displayProps = {
         avaturnModelUrl,
         animationIndex: String(animIndex),
+        voiceFormat: "wav",
+        voiceSampleRate: String(wavSampleRate),
         updatedAt: new Date().toISOString()
       };
 
-      if (!existingItemId) {
-        setText("submitStatus", "Creating reel item…", "muted");
-        log("Catalog/CreateDraftItem (Publish=true) ...");
+      setText("submitStatus", existingItemId ? "Updating reel item…" : "Creating reel item…", "muted");
+      log("Catalog/CreateDraftItem (Publish=true) ...");
 
-        const created = await playfabPost(
-          titleId,
-          "Catalog/CreateDraftItem",
-          {
-            Item: {
-              Type: "ugc",
-              Title: { NEUTRAL: itemTitle },
-              Description: { NEUTRAL: "Spotlight reel (voice + avaturn url)" },
-              IsHidden: false,
-              //Tags: ["spotlight-reel"],
-              DisplayProperties: displayProps,
-              Contents: [
-                { Id: voiceUp.Id, Url: voiceUrlBase }
-              ]
-            },
-            Publish: true,
-            AllowOverwrite: false
-          },
-          { "X-EntityToken": entityToken }
-        );
-
-        const newId = created?.Item?.Id;
-        if (!newId) throw new Error("CreateDraftItem succeeded but no Item.Id returned");
-
-        // Save pointer for 1 reel per user
-        await setPrimaryReelItemId(titleId, newId);
-        log(`Saved ${PRIMARY_REEL_KEY} = ${newId}`, "ok");
-
-        setText("submitStatus", `Created ✅ ItemId: ${newId}`, "ok");
-        log(`Reel created & published. ItemId: ${newId}`, "ok");
-      } else {
-        // Update existing item
-        setText("submitStatus", "Updating reel item…", "muted");
-        log("Catalog/UpdateDraftItem ...");
-
-        // Overwrite the draft for the same item id and publish immediately
-      await playfabPost(
+      const created = await playfabPost(
         titleId,
         "Catalog/CreateDraftItem",
         {
           Item: {
-            Id: existingItemId,
+            Id: existingItemId || undefined,
             Type: "ugc",
             Title: { NEUTRAL: itemTitle },
             Description: { NEUTRAL: "Spotlight reel (voice + avaturn url)" },
@@ -537,26 +558,21 @@
             ]
           },
           Publish: true,
-          AllowOverwrite: true
+          AllowOverwrite: !!existingItemId
         },
         { "X-EntityToken": entityToken }
       );
 
+      const itemId = created?.Item?.Id || existingItemId;
+      if (!itemId) throw new Error("CreateDraftItem succeeded but no Item.Id returned");
 
-        // Publish update
-        setText("submitStatus", "Publishing update…", "muted");
-        log("Catalog/PublishDraftItem ...");
-
-        await playfabPost(
-          titleId,
-          "Catalog/PublishDraftItem",
-          { Id: existingItemId },
-          { "X-EntityToken": entityToken }
-        );
-
-        setText("submitStatus", `Updated ✅ ItemId: ${existingItemId}`, "ok");
-        log(`Reel updated & published. ItemId: ${existingItemId}`, "ok");
+      if (!existingItemId) {
+        await setPrimaryReelItemId(titleId, itemId);
+        log(`Saved ${PRIMARY_REEL_KEY} = ${itemId}`, "ok");
       }
+
+      setText("submitStatus", `Done ✅ ItemId: ${itemId}`, "ok");
+      log(`Reel saved & published. ItemId: ${itemId}`, "ok");
     }
 
     // -----------------------------
@@ -618,7 +634,6 @@
     (function boot() {
       loadSession();
 
-      // Fill defaults if empty
       if (!$("titleId").value.trim()) $("titleId").value = DEFAULTS.PLAYFAB_TITLE_ID;
       if (!$("avaturnSubdomain").value.trim()) $("avaturnSubdomain").value = DEFAULTS.AVATURN_SUBDOMAIN;
 
@@ -629,7 +644,6 @@
         show("submitBox");
         log(`Session restored. Entity: ${entity.Type} / ${entity.Id}`, "ok");
 
-        // Load Avaturn automatically
         initAvaturn().catch(err => {
           log(`Avaturn init failed: ${err.message}`, "bad");
           $("avaturnStatus").textContent = err.message;
