@@ -39,10 +39,10 @@
 
     <label>Animation Index</label>
     <select id="animIndex">
-      <option value="0">0</option>
-      <option value="1">1</option>
-      <option value="2">2</option>
-      <option value="3">3</option>
+      <option value="0">Idle</option>
+      <option value="1">Cheer</option>
+      <option value="2">Wave</option>
+      <option value="3">Dance</option>
     </select>
 
     <div class="row" style="margin-top: 12px;">
@@ -72,7 +72,7 @@
   </fieldset>
 
   <fieldset id="avaturnBox" class="hidden">
-    <legend>2) Create Avatar (Avaturn)</legend>
+    <legend>2) Create Avatar</legend>
     <div class="muted">
       Click Next/Export in Avaturn when done. We’ll capture the model URL.
       <span id="avaturnPill" class="pill">Waiting for export…</span>
@@ -82,7 +82,7 @@
   </fieldset>
 
   <fieldset id="audioBox" class="hidden">
-    <legend>3) Voice Note (Record exactly 5s)</legend>
+    <legend>3) Voice Note</legend>
     <div class="row">
       <button id="btnRec" type="button">Record 5s</button>
       <button id="btnStop" type="button" disabled>Stop</button>
@@ -93,7 +93,7 @@
   </fieldset>
 
   <fieldset id="submitBox" class="hidden">
-    <legend>4) Create/Update Reel (1 per user)</legend>
+    <legend>4) Create/Update Reel</legend>
 
     <label>Item Title</label>
     <input id="itemTitle" value="Spotlight Reel" />
@@ -534,8 +534,9 @@
       const displayProps = {
         avaturnModelUrl,
         animationIndex: String(animIndex),
-        voiceFormat: "wav",
-        voiceSampleRate: String(wavSampleRate),
+        upvote: 0,
+        downvote: 0,
+        backers: 0,
         updatedAt: new Date().toISOString()
       };
 
