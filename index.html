@@ -534,10 +534,7 @@
       const displayProps = {
         avaturnModelUrl,
         animationIndex: String(animIndex),
-        upvote: 0,
-        downvote: 0,
-        backers: 0,
-        updatedAt: new Date().toISOString()
+        username: $("username").value.trim()
       };
 
       setText("submitStatus", existingItemId ? "Updating reel item…" : "Creating reel item…", "muted");
